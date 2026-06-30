@@ -193,6 +193,5 @@ MAX_UPLOAD_SIZE_MB=10
 ## 👥 Author
 
 - **Name**: Shewan Dagne
-- **Email**: shewan.dagne1@gmail.com
-- **LinkedIn**: [linkedin.com/in/sdagne](https://linkedin.com/in/sdagne)
-- **GitHub**: [@username](https://github.com/sdagne)
+- **Email**: [shewan.dagne.1@gmail.com](mailto:shewan.dagne.1@gmail.com)
+- **GitHub**: [sdagne](https://github.com/sdagne)
