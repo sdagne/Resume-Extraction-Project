@@ -17,8 +17,8 @@ graph TD
     
     subgraph Detection [app/core/pipeline.py]
         Det --> Classify{PDF Type?}
-        Classify -- Digital --> Digi[extract_digital]
-        Classify -- Scanned --> Scan[extract_scanned]
+        Classify -- Digital --> Digi[extract_digital: digital_parser.py]
+        Classify -- Scanned --> Scan[extract_scanned: ocr_parser.py]
     end
     
     subgraph Extraction [Extraction Engines]
@@ -29,27 +29,27 @@ graph TD
     DigiP --> Text[3. Unified Text Object]
     ScanP --> Text
     
-    Text --> Layout[4. Layout Parsing]
+    Text --> Layout[4. Layout Parsing: layout_analyzer.py]
     Layout -- DOCEX_RESUME_LAYOUT=1 --> PP[PP-Structure / Reading Order]
     
-    PP --> Parser[5. Core Resume Parser]
+    PP --> Parser[5. Core Resume Parser: app/extraction/]
     
-    subgraph Core [app/extraction/]
+    subgraph Core [Logic Layer]
         Parser --> Seg[Section segmentation]
         Seg --> Field[Field Identification]
         Field --> Links[Apply Hidden Links]
     end
     
-    Links --> Enh[6. Enhancement Layer]
+    Links --> Enh[6. Enhancement Layer: resume_enhancer.py]
     Enh -- DOCEX_RESUME_ENHANCE=1 --> EnhL[NLP Repair / Skill Normalization]
     
-    EnhL --> Build[7. JSON Build]
+    EnhL --> Build[7. JSON Build: extract.py]
     
-    Build --> Persist[8. Hybrid Persistence]
+    Build --> Persist[8. Hybrid Persistence: hybrid_repository.py]
     
-    subgraph Persistence [app/database/hybrid_repository.py]
-        Persist --> Legacy[Track A: Legacy CRM Tables]
-        Persist --> Norm[Track B: Normalized T2O Tables]
+    subgraph Persistence [Database Tier]
+        Persist --> Legacy[Track A: Legacy CRM]
+        Persist --> Norm[Track B: Normalized T2O]
     end
     
     Legacy --> Resp([9. Final JSON Response])
