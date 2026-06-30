@@ -26,6 +26,11 @@ from app.validation.confidence_scorer import confidence_scorer
 from app.models.schemas.extracted_data import ExtractedResumeSchema
 from app.storage.temp_manager import temp_manager
 
+# ── Enterprise Tiers ───────────────────────────────────────────────────────────
+from app.security.upload_security import upload_security
+from app.security.pdf_unlock      import pdf_unlocker, PDFEncryptedError
+from app.enhancement.resume_enhancer import resume_enhancer
+
 logger = get_logger(__name__)
 
 
@@ -35,16 +40,19 @@ class ExtractionPipeline:
     resume extraction workflow end-to-end.
 
     Pipeline stages:
+      0.  Security Scan      → magic-byte, JS scan, filename sanitize
+      0.5 PDF Unlock         → detect + decrypt password-protected PDFs
       1.  PDF Detection      → digital / scanned / mixed
       2.  Text Extraction    → PyMuPDF or PaddleOCR
       3.  Layout Analysis    → column detection, reading order
       4.  Text Reconstruction→ correct reading order
       5.  Field Extraction   → all resume fields
-      6.  Skill Matching     → normalize against taxonomy
-      7.  Title Normalization→ standardize job titles
-      8.  Schema Validation  → validate + sanitize
-      9.  Confidence Scoring → per-field + overall score
-      10. Return Result      → ExtractedResumeSchema
+      6.  Enhancement Layer  → normalize / repair / fuzzy / cert-map / NER
+      7.  Skill Matching     → normalize against taxonomy
+      8.  Title Normalization→ standardize job titles
+      9.  Schema Validation  → validate + sanitize
+      10. Confidence Scoring → per-field + overall score
+      11. Return Result      → ExtractedResumeSchema
     """
 
     def __init__(self):
@@ -53,25 +61,32 @@ class ExtractionPipeline:
     # ─── Main Entry ────────────────────────────────────────────────────────────
     def run(
         self,
-        file_path:    str | Path,
-        resume_id:    Optional[UUID] = None,
-        log_stages:   bool = True,
+        file_path:       str | Path,
+        resume_id:       Optional[UUID] = None,
+        log_stages:      bool = True,
+        file_bytes:      Optional[bytes] = None,
+        skip_security:   bool = False,
     ) -> dict:
         """
         Run the complete extraction pipeline on a resume file.
 
         Args:
-            file_path:  Path to the PDF file
-            resume_id:  Optional resume ID for logging
-            log_stages: Whether to log timing per stage
+            file_path:      Path to the PDF file
+            resume_id:      Optional resume ID for logging
+            log_stages:     Whether to log timing per stage
+            file_bytes:     Raw bytes for security scan (optional but recommended)
+            skip_security:  Bypass security scan (testing only)
 
         Returns:
             {
-                "schema":       ExtractedResumeSchema,
-                "pdf_metadata": dict,
-                "warnings":     list[str],
-                "timings":      dict[str, float],
+                "schema":             ExtractedResumeSchema,
+                "pdf_metadata":       dict,
+                "warnings":           list[str],
+                "timings":            dict[str, float],
                 "overall_confidence": float,
+                "security_report":    dict,
+                "enhancement_report": dict,
+                "unlock_result":      dict,
             }
         """
         pipeline_start = time.time()
@@ -82,6 +97,74 @@ class ExtractionPipeline:
             f"Pipeline started: {file_path.name} "
             f"(resume_id={resume_id})"
         )
+
+        # ── Stage 0: Security Scan ─────────────────────────────────────────────
+        security_report = {}
+        if not skip_security and file_bytes is not None:
+            sec = self._stage(
+                "security_scan",
+                lambda: upload_security.assert_upload_safe(
+                    file_bytes,
+                    file_path.name,
+                    max_size_mb=settings.MAX_UPLOAD_SIZE_MB,
+                ),
+                all_warnings,
+            )
+            if sec is not None:
+                security_report = sec.as_dict()
+                if not sec.is_safe:
+                    all_warnings.append(
+                        f"Security scan failed: {sec.findings}"
+                    )
+                    logger.error(
+                        f"SECURITY: Unsafe file rejected | "
+                        f"risk={sec.risk_level} | findings={sec.findings}"
+                    )
+                    # Return early — do not process malicious files
+                    return {
+                        "schema":             ExtractedResumeSchema(),
+                        "pdf_metadata":       {},
+                        "warnings":           all_warnings,
+                        "timings":            self.stage_timings,
+                        "overall_confidence": 0.0,
+                        "security_report":    security_report,
+                        "enhancement_report": {},
+                        "unlock_result":      {},
+                    }
+
+        # ── Stage 0.5: PDF Unlock ──────────────────────────────────────────────
+        unlock_info = {}
+        try:
+            unlock_result = pdf_unlocker.unlock(
+                file_path,
+                output_dir=settings.TEMP_DIR,
+            )
+            unlock_info = {
+                "was_encrypted": unlock_result.was_encrypted,
+                "was_unlocked":  unlock_result.was_unlocked,
+                "owner_locked":  unlock_result.owner_locked,
+            }
+            if unlock_result.was_unlocked and unlock_result.unlocked_path:
+                file_path = unlock_result.unlocked_path
+                logger.info(
+                    f"Using unlocked PDF: {file_path.name} | "
+                    f"owner_only={unlock_result.owner_locked}"
+                )
+        except PDFEncryptedError as exc:
+            all_warnings.append(str(exc))
+            logger.error(f"PDF unlock failed: {exc}")
+            return {
+                "schema":             ExtractedResumeSchema(),
+                "pdf_metadata":       {},
+                "warnings":           all_warnings,
+                "timings":            self.stage_timings,
+                "overall_confidence": 0.0,
+                "security_report":    security_report,
+                "enhancement_report": {},
+                "unlock_result":      unlock_info,
+            }
+        except Exception as exc:
+            all_warnings.append(f"PDF unlock skipped: {exc}")
 
         # ── Stage 1: PDF Detection ─────────────────────────────────────────────
         pdf_metadata = self._stage(
@@ -180,7 +263,29 @@ class ExtractionPipeline:
             default=ExtractedResumeSchema(),
         )
 
-        # ── Stage 6: Skill Matching ────────────────────────────────────────────
+        # ── Stage 6: Enhancement Layer ─────────────────────────────────────────
+        enhancement_report = {}
+        enhanced_schema, enh_report = self._stage(
+            "enhancement",
+            lambda: resume_enhancer.enhance(extracted_schema, final_text),
+            all_warnings,
+            default=(extracted_schema, None),
+        )
+        if enhanced_schema is not None:
+            extracted_schema  = enhanced_schema
+        if enh_report is not None:
+            enhancement_report = {
+                "enabled":            enh_report.enabled,
+                "passes_run":         enh_report.passes_run,
+                "skills_split":       enh_report.skills_split,
+                "skills_fuzzy":       enh_report.skills_fuzzy,
+                "fields_repaired":    enh_report.fields_repaired,
+                "sections_recovered": enh_report.sections_recovered,
+                "certs_mapped":       enh_report.certs_mapped,
+                "entities_added":     enh_report.entities_added,
+            }
+
+        # ── Stage 7: Skill Matching ────────────────────────────────────────────
         extracted_schema = self._stage(
             "skill_matching",
             lambda: self._normalize_skills(extracted_schema),
@@ -188,7 +293,7 @@ class ExtractionPipeline:
             default=extracted_schema,
         )
 
-        # ── Stage 7: Job Title Normalization ───────────────────────────────────
+        # ── Stage 8: Job Title Normalization ───────────────────────────────────
         extracted_schema = self._stage(
             "title_normalization",
             lambda: self._normalize_titles(extracted_schema),
@@ -196,7 +301,7 @@ class ExtractionPipeline:
             default=extracted_schema,
         )
 
-        # ── Stage 8: Schema Validation ─────────────────────────────────────────
+        # ── Stage 9: Schema Validation ─────────────────────────────────────────
         validated_schema, validation_warnings = self._stage(
             "schema_validation",
             lambda: schema_validator.validate(extracted_schema),
@@ -205,7 +310,7 @@ class ExtractionPipeline:
         )
         all_warnings.extend(validation_warnings)
 
-        # ── Stage 9: Confidence Scoring ────────────────────────────────────────
+        # ── Stage 10: Confidence Scoring ───────────────────────────────────────
         confidence_scores = self._stage(
             "confidence_scoring",
             lambda: confidence_scorer.score(validated_schema),
@@ -248,6 +353,9 @@ class ExtractionPipeline:
             "warnings":           all_warnings,
             "timings":            dict(self.stage_timings),
             "overall_confidence": overall_confidence,
+            "security_report":    security_report,
+            "enhancement_report": enhancement_report,
+            "unlock_result":      unlock_info,
         }
 
     # ─── Text Extraction Router ────────────────────────────────────────────────

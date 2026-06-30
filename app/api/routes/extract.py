@@ -110,10 +110,17 @@ async def extract_resume(
 
     # Run pipeline synchronously
     try:
-        start  = time.time()
+        start = time.time()
+
+        # Read bytes for security + pipeline handoff
+        from pathlib import Path as _Path
+        _fp = _Path(resume.file_path)
+        _file_bytes = _fp.read_bytes() if _fp.exists() else None
+
         result = extraction_pipeline.run(
-            file_path = resume.file_path,
-            resume_id = resume.id,
+            file_path  = resume.file_path,
+            resume_id  = resume.id,
+            file_bytes = _file_bytes,
         )
 
         schema     = result["schema"]
@@ -124,7 +131,7 @@ async def extract_resume(
         # Serialize schema
         extracted_data = schema.model_dump()
 
-        # Update DB
+        # Update DB (main record)
         repo.mark_as_completed(
             resume_id      = resume_id,
             extracted_data = extracted_data,
@@ -138,6 +145,22 @@ async def extract_resume(
             "page_count":     pdf_meta.get("page_count"),
             "is_multicolumn": pdf_meta.get("is_multicolumn"),
         })
+
+        # ── Hybrid Persistence (Tier 4) ───────────────────────────────────────
+        from app.database.hybrid_repository import hybrid_repo
+        persist_result = hybrid_repo.insert_extraction(
+            db          = db,
+            resume_id   = resume.id,
+            schema      = schema,
+            raw_text    = schema.raw_text if hasattr(schema, "raw_text") else "",
+            file_path   = str(resume.file_path),
+            inserted_by = "api",
+        )
+        if not persist_result.legacy_success:
+            logger.warning(
+                f"Legacy CRM persist skipped | "
+                f"reason={persist_result.legacy_error}"
+            )
 
         # Upsert candidate
         from app.database.resume_repository import CandidateRepository

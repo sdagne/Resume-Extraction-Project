@@ -31,6 +31,7 @@ from app.api.middleware.error_handler import (
     FileUploadException,
     FileNotFoundException,
 )
+from app.security.upload_security import upload_security
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/upload", tags=["Upload"])
@@ -109,6 +110,18 @@ async def upload_resume(
                 "size_mb": round(len(content) / 1024 / 1024, 2),
                 "max_mb":  settings.MAX_UPLOAD_SIZE_MB,
             },
+        )
+
+    # ── Security Scan (Tier 1) ─────────────────────────────────────────────────
+    sec_report = upload_security.assert_upload_safe(
+        file_bytes   = content,
+        filename     = file.filename or "upload",
+        max_size_mb  = settings.MAX_UPLOAD_SIZE_MB,
+    )
+    if not sec_report.is_safe:
+        raise FileUploadException(
+            message = f"File rejected by security scan: {sec_report.findings}",
+            details = sec_report.as_dict(),
         )
 
     # ── Duplicate check ───────────────────────────────────────────────────────
