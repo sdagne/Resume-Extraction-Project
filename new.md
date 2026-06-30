@@ -58,82 +58,89 @@ graph TD
 
 ## Detailed Component Breakdown
 
+```text
 ┌──────────────────────────────┐
-│  **CLIENT**                    │
-│  [POST /api/v1/extract/resume](app/api/routes/extract.py) (PDF) │
+│  CLIENT                       │
+│  POST /extract/resume (PDF)   │
 └───────────────┬──────────────┘
                 │
                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ **1. FILE VALIDATION**                      [run_pipeline](app/core/pipeline.py)      │
-│    • `assert_upload_safe` (Magic Bytes, JS)  [upload_security.py](app/security/upload_security.py) │
-│    • `unlock_pdf` (Remove Owner Passwords)   [pdf_unlock.py](app/security/pdf_unlock.py)           │
+│ 1. FILE VALIDATION                         resume_api.py                  │
+│    • assert_upload_safe (type / size / security)   upload_security.py     │
+│    • unlock_pdf (password-protected?)              pdf_unlock.py          │
 └───────────────┬───────────────────────────────────────────────────────────┘
                 │
                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ **2. SOURCE DETECTION**                     [pipeline.py](app/core/pipeline.py)         │
-│    `classify_source` → **DIGITAL_PDF**  |  **SCANNED_PDF / IMAGE**          │
+│ 2. SOURCE DETECTION                        pipeline.py                     │
+│    classify_source → DIGITAL_PDF  |  SCANNED_PDF / IMAGE                   │
 └───────┬───────────────────────────────────────┬──────────────────────────┘
-        │ *digital path*                         │ *scanned path*
+        │ digital                                │ scanned / image
         ▼                                        ▼
 ┌───────────────────────────┐      ┌─────────────────────────────────────┐
-│ **extract_digital**       │      │ **extract_scanned**    [ocr_parser.py](app/core/ocr_parser.py) │
-│ [digital_parser.py](app/core/digital_parser.py) │      │ • OpenCV Preprocessing            │
-│ • PyMuPDF + pdfplumber    │      │ • PaddleOCR / Tesseract           │
-│ • Hidden Link Extraction  │      │ • Barcode-mask & Deskew           │
+│ extract_digital           │      │ extract_scanned        extract.py    │
+│   PyMuPDF + pdfplumber     │      │   OpenCV preprocess (deskew, denoise │
+│   + hidden hyperlinks      │      │   barcode-mask, OSD) → PaddleOCR /   │
+│            extract.py      │      │   Tesseract                          │
 └───────────┬───────────────┘      └──────────────────┬───────────────────┘
             └──────────────────┬───────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ **3. UNIFIED TEXT**  (`ExtractedText` model: pages → text + tables)       │
+│ 3. UNIFIED TEXT  (ExtractedText: pages → text + tables)                    │
 └───────────────┬───────────────────────────────────────────────────────────┘
                 │
                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ **4. LAYOUT PARSING** [Env: `DOCEX_RESUME_LAYOUT`] [layout_analyzer.py](app/core/layout_analyzer.py) │
-│    PP-Structure → reading order / columns / titles / tables               │
-│    *Fail-safe: fall back to raw text on analysis error*                   │
+│ 4. LAYOUT PARSING  [ON • DOCEX_RESUME_LAYOUT=1]      layout_parser.py      │
+│    PP-Structure → reading order / columns / titles                        │
+│    fail-safe: on any error → original text                                │
 └───────────────┬───────────────────────────────────────────────────────────┘
                 │
                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ **5. RESUME PARSER (Core)**                 [app/extraction/](app/extraction/)         │
-│    • Contact / Name / Address / Headline / Summary                        │
-│    • `_segment` → Match section headers via aliases & regex               │
-│    • `_build_section` → Experience, Education, Skills, Projects, etc.     │
-│    • `_apply_hidden_links` (LinkedIn, GitHub, Portfolio injection)        │
+│ 5. RESUME PARSER (core)                     resume.py                      │
+│    • contact / name / address / headline                                  │
+│    • _segment  → _match_section_header  (header + despace + aliases)       │
+│    • _build_section → experience / education / skill / project /           │
+│      certification / language / achievement items                         │
+│    • _apply_hidden_links (fill empty LinkedIn/GitHub/Portfolio)            │
 └───────────────┬───────────────────────────────────────────────────────────┘
                 │
                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ **6. ENHANCEMENT LAYER** [Env: `DOCEX_RESUME_ENHANCE`] [resume_enhancer.py](app/enhancement/resume_enhancer.py) │
-│    • Normalize dates (E1)    • Skill splitting (E5)                       │
-│    • Section recovery (E2)   • spaCy NER Entities (E6)                    │
-│    • Field repairs (E4)      • Cert-URL mapping (E7)                      │
+│ 6. ENHANCEMENT LAYER  [OFF • DOCEX_RESUME_ENHANCE=0]  resume_enhance.py    │
+│    ──── currently SKIPPED (no-op) ────                                     │
+│    (normalize · section-recovery · headerless-exp · field-repairs ·       │
+│     skill-split · validator · fuzzy · spaCy entities · cert-url mapper)    │
 └───────────────┬───────────────────────────────────────────────────────────┘
                 │
                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ **7. JSON BUILD**                           [extract.py](app/api/routes/extract.py)    │
-│    `payload = { resume{…sections}, validation, confidence }`              │
+│ 7. JSON BUILD                               resume_api.py / schema.py      │
+│    payload = { resume{…sections}, validation, confidence,                  │
+│               mapped = build_resume_t2o(doc) }      db/procedures.py       │
 └───────────────┬───────────────────────────────────────────────────────────┘
                 │
                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ **8. HYBRID PERSIST** `insert_extraction`   [hybrid_repository.py](app/database/hybrid_repository.py) │
-│   ┌─ **LEGACY TRACK** ──────────────┐  ┌─ **NORMALIZED T2O TRACK** ───────┐ │
-│   │ `IAPL_CRM_RESUME_PROFILE`       │  │ `Candidates_text_to_ocr`         │ │
-│   │ `IAPL_CRM_RESUME_SECTION_ITEM`  │  │ `Work_text_to_ocr` (+raw)        │ │
-│   └─────────────────────────────────┘  │ `Skills_text_to_ocr` (+raw)      │ │
-│                                        │ `Resume_Raw_Data_text_to_ocr`    │ │
-│   *Best-effort: T2O failures never*     └──────────────────────────────────┘ │
-│   *break the legacy CRM insertion*                                          │
+│ 8. PERSIST  insert_extraction()                     db/procedures.py       │
+│   ┌─ legacy ──────────────────────┐  ┌─ normalized *_text_to_ocr ───────┐ │
+│   │ IAPL_CRM_RESUME_PROFILE        │  │ Candidates_text_to_ocr           │ │
+│   │ IAPL_CRM_RESUME_SECTION_ITEM   │  │  (+ file_path, inserted_date,    │ │
+│   └────────────────────────────────┘  │   inserted_by)                   │ │
+│                                        │ Educations_text_to_ocr (+raw_text)│ │
+│   best-effort: t2o failure never       │ Companies / Skills / Languages / │ │
+│   breaks the legacy insert              │ Work / Projects / Certs / …      │ │
+│                                        │ Resume_Raw_Data_text_to_ocr      │ │
+│                                        │  (raw_text_resume + json_data)   │ │
+│                                        └──────────────────────────────────┘ │
 └───────────────┬───────────────────────────────────────────────────────────┘
                 │
                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ **9. RESPONSE** → JSON                                                  │
-│    `{ resume, mapped, validation, confidence, extraction_id, db }`        │
-└─────────────────────────────────────────────────────────────────────────┘
+│ 9. RESPONSE  → JSON  { resume, mapped, validation,                         │
+│                       confidence, extraction_id, db, source_file_url }     │
+└───────────────────────────────────────────────────────────────────────────┘
+```
