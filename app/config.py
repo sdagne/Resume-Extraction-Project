@@ -81,6 +81,10 @@ class Settings(BaseSettings):
         env="CORS_ORIGINS"
     )
 
+    # ─── Enterprise Features ───────────────────────────────────────────────────
+    DOCEX_RESUME_ENHANCE: bool = Field(default=False, env="DOCEX_RESUME_ENHANCE")
+    DOCEX_RESUME_LAYOUT: bool = Field(default=False, env="DOCEX_RESUME_LAYOUT")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

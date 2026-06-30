@@ -7,7 +7,13 @@ from typing import Optional
 
 import cv2
 from PIL import Image
-from paddleocr import PaddleOCR, PPStructure
+try:
+    from paddleocr import PaddleOCR, PPStructure
+except ImportError:
+    from paddleocr import PaddleOCR
+    PPStructure = None
+    import logging
+    logging.getLogger("uvicorn").warning("PPStructure not found in paddleocr. Layout analysis will be limited.")
 
 from app.config import settings
 from app.utils.logger import get_logger
