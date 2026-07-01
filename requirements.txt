@@ -37,6 +37,10 @@ email-validator>=2.2.0
 openpyxl>=3.1.2
 pandas>=2.2.2
 
+# Rate Limiting & Security
+slowapi>=0.1.9
+limits>=3.13.0
+
 # Storage & Utilities
 boto3>=1.34.100
 python-dotenv>=1.0.1

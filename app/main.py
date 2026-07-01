@@ -6,6 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.exc import SQLAlchemyError
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import settings
 from app.utils.logger import get_logger
@@ -26,6 +29,8 @@ from app.api.middleware.error_handler import (
     unhandled_exception_handler,
 )
 from app.api.middleware.request_logger import RequestLoggerMiddleware
+from app.api.middleware.security_headers import SecurityHeadersMiddleware
+from app.security.rate_limiter import limiter, rate_limit_exceeded_handler
 
 logger = get_logger(__name__)
 
@@ -135,6 +140,14 @@ Upload → PDF Detection → Text Extraction → Layout Analysis
         allow_headers     = ["*"],
         expose_headers    = ["X-Request-ID", "X-Process-Time"],
     )
+
+    # Rate Limiting (SlowAPI)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
+
+    # Security Headers (OWASP best-practice)
+    app.add_middleware(SecurityHeadersMiddleware, is_production=settings.is_production)
 
     # GZip compression
     app.add_middleware(GZipMiddleware, minimum_size=1000)

@@ -3,10 +3,11 @@
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, BackgroundTasks, status
+from fastapi import APIRouter, Depends, BackgroundTasks, Request, status
 from sqlalchemy.orm import Session
 
 from app.utils.logger import get_logger
+from app.config import settings
 from app.database.connection import get_db
 from app.database.resume_repository import ResumeRepository
 from app.core.pipeline import extraction_pipeline
@@ -14,6 +15,9 @@ from app.api.middleware.error_handler import (
     FileNotFoundException,
     ExtractionException,
 )
+from app.security.api_key import require_api_key
+from app.security.audit_logger import log_extraction
+from app.security.rate_limiter import limiter
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/extract", tags=["Extraction"])
@@ -70,10 +74,13 @@ class BulkExtractResponse(BaseModel):
         "Use this for immediate results on individual resumes."
     ),
 )
+@limiter.limit(settings.RATE_LIMIT_EXTRACT)
 async def extract_resume(
+    request: Request,
     resume_id: str,
     force:     bool = False,
     db: Session = Depends(get_db),
+    api_key: str = Depends(require_api_key),
 ) -> ExtractionResult:
     """
     Synchronously extract a specific resume.

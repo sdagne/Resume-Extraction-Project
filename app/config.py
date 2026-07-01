@@ -80,6 +80,16 @@ class Settings(BaseSettings):
         default=["http://localhost:3000", "http://localhost:8080"],
         env="CORS_ORIGINS"
     )
+    # API Key Authentication
+    ENABLE_API_KEY_AUTH: bool = Field(default=False, env="ENABLE_API_KEY_AUTH")
+    API_KEY: str = Field(
+        default="dev-insecure-key-change-in-production",
+        env="API_KEY"
+    )
+    # Rate Limiting (requests per minute per IP)
+    RATE_LIMIT_UPLOAD: str   = Field(default="20/minute",  env="RATE_LIMIT_UPLOAD")
+    RATE_LIMIT_EXTRACT: str  = Field(default="30/minute",  env="RATE_LIMIT_EXTRACT")
+    RATE_LIMIT_EXPORT: str   = Field(default="60/minute",  env="RATE_LIMIT_EXPORT")
 
     # ─── Enterprise Features ───────────────────────────────────────────────────
     DOCEX_RESUME_ENHANCE: bool = Field(default=False, env="DOCEX_RESUME_ENHANCE")

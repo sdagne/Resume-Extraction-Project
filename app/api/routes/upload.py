@@ -32,6 +32,10 @@ from app.api.middleware.error_handler import (
     FileNotFoundException,
 )
 from app.security.upload_security import upload_security
+from app.security.api_key import require_api_key
+from app.security.audit_logger import log_upload, log_security_event
+from app.security.rate_limiter import limiter
+from fastapi import Request
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/upload", tags=["Upload"])
@@ -101,7 +105,13 @@ async def upload_resume(
     # Read file content for hash check
     content = await file.read()
     await file.seek(0)   # Reset for saving
-
+    # Audit log the upload event
+    log_upload(
+        client_ip=request.client.host if request.client else "unknown",
+        filename=file.filename or "unknown",
+        size_bytes=len(content),
+        api_key_hint=api_key,
+    )
     # Check file size
     if len(content) > settings.max_upload_size_bytes:
         raise FileUploadException(
