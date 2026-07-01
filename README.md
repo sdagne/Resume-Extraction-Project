@@ -10,8 +10,8 @@ A professional pipeline for extracting structured data from digital and scanned 
 
 The Resume Extraction Project is a production-grade, high-accuracy document processing system that converts PDF resumes into structured JSON data without using LLMs. The system employs a sophisticated multi-stage pipeline combining OCR, NLP, layout analysis, and rule-based extraction techniques.
 
-**Current Maturity Level**: Tier 2 (Production-Ready)
-**Target Maturity Level**: Tier 1 (Enterprise-Grade)
+- **Current Maturity Level**: Tier 2 (Production-Ready)
+- **Target Maturity Level**: Tier 1 (Enterprise-Grade)
 
 # 📄 Resume Extractor API
 
